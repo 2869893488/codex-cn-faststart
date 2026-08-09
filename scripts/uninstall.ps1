@@ -28,14 +28,18 @@ if ($text -match [regex]::Escape($marker)) {
     Write-Host '[1/4] hosts 中无屏蔽段，跳过'
 }
 
-# ---------- 2. 移除开机自启（任务计划 + 旧版启动文件夹残留） ----------
+# ---------- 2. 移除开机自启与启动器（默认模式任务计划 + 轻量模式启动器都清理） ----------
 $taskName = 'codex-cn-faststart-blackhole'
 schtasks /delete /tn $taskName /f 2>$null | Out-Null
 $vbs = Join-Path (Join-Path $env:USERPROFILE '.codex\faststart') 'start-blackhole.vbs'
 if (Test-Path $vbs) { Remove-Item $vbs -Force }
+$launcherVbs = Join-Path (Join-Path $env:USERPROFILE '.codex\faststart') 'launch-codex.vbs'
+if (Test-Path $launcherVbs) { Remove-Item $launcherVbs -Force }
+$desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'ChatGPT.lnk'
+if (Test-Path $desktopLnk) { Remove-Item $desktopLnk -Force }
 $legacyVbs = Join-Path ([Environment]::GetFolderPath('Startup')) 'loopback-blackhole.vbs'
 if (Test-Path $legacyVbs) { Remove-Item $legacyVbs -Force }
-Write-Host '[2/4] 开机自启已移除'
+Write-Host '[2/4] 开机自启与启动器已移除'
 
 # ---------- 3. 停止黑洞服务 ----------
 $proc = Get-Process -Name 'loopback-blackhole' -ErrorAction SilentlyContinue
