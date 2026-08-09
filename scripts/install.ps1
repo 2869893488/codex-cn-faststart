@@ -39,10 +39,25 @@ if (-not (Get-Process -Name 'loopback-blackhole' -ErrorAction SilentlyContinue))
 
 # ---------- 第 2 步：开机自启（任务计划，登录时隐藏运行） ----------
 # 用任务计划程序而非启动文件夹：在"任务计划程序"里可见、可禁用、可删除，更透明温和。
+# blackhole.exe 是控制台程序，直接 Run 会闪现黑色终端窗口；这里先由
+# start-blackhole-hidden.ps1 用 CreateNoWindow 启动（不创建任何窗口），
+# start-blackhole.vbs 只负责静默调用该 ps1（wscript 本身不弹窗）。
+$ps1 = Join-Path $installDir 'start-blackhole-hidden.ps1'
+@"
+# Start loopback-blackhole.exe without creating any console window.
+if (-not (Test-Path '$exe')) { exit 1 }
+if (Get-Process -Name 'loopback-blackhole' -ErrorAction SilentlyContinue) { exit 0 }
+`$psi = New-Object System.Diagnostics.ProcessStartInfo
+`$psi.FileName = '$exe'
+`$psi.UseShellExecute = `$false
+`$psi.CreateNoWindow = `$true
+`$psi.WindowStyle = 'Hidden'
+[System.Diagnostics.Process]::Start(`$psi) | Out-Null
+"@ | Set-Content -LiteralPath $ps1 -Encoding ASCII
 $vbs = Join-Path $installDir 'start-blackhole.vbs'
 @"
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run "$exe", 0, False
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$ps1""", 0, False
 "@ | Set-Content -LiteralPath $vbs -Encoding ASCII
 $taskName = 'codex-cn-faststart-blackhole'
 schtasks /create /tn $taskName /tr "wscript.exe `"$vbs`"" /sc onlogon /rl LIMITED /f | Out-Null
