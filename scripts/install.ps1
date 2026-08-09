@@ -3,11 +3,13 @@
 # 原理详见 README.md。脚本可重复执行（幂等）。
 #
 # 用法（PowerShell）：
-#   .\install.ps1                      # 只安装通用快速启动组件
+#   .\install.ps1                      # 通用快速启动（默认：登录时自动运行黑洞服务）
+#   .\install.ps1 -Lightweight         # 轻量模式：开机零自启，改生成桌面"ChatGPT"快捷方式按需启动
 #   .\install.ps1 -IncludeDeepSeekEnv  # 额外写入 ~/.codex/.env 快速失败代理
-#                                      # （DeepSeek 直连用户才需要）
+#                                      # （DeepSeek 直连用户才需要，可与上面组合）
 param(
-    [switch]$IncludeDeepSeekEnv
+    [switch]$IncludeDeepSeekEnv,
+    [switch]$Lightweight
 )
 $ErrorActionPreference = 'Stop'
 
@@ -16,6 +18,7 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) {
     $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($IncludeDeepSeekEnv) { $argList += ' -IncludeDeepSeekEnv' }
+    if ($Lightweight) { $argList += ' -Lightweight' }
     Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait
     exit $LASTEXITCODE
 }
@@ -37,11 +40,10 @@ if (-not (Get-Process -Name 'loopback-blackhole' -ErrorAction SilentlyContinue))
     Write-Host '[1/5] 黑洞服务已在运行，跳过'
 }
 
-# ---------- 第 2 步：开机自启（任务计划，登录时隐藏运行） ----------
-# 用任务计划程序而非启动文件夹：在"任务计划程序"里可见、可禁用、可删除，更透明温和。
-# blackhole.exe 是控制台程序，直接 Run 会闪现黑色终端窗口；这里先由
+# ---------- 第 2 步：黑洞服务的启动方式（两种模式） ----------
+# blackhole.exe 是控制台程序，直接 Run 会闪现黑色终端窗口；统一先由
 # start-blackhole-hidden.ps1 用 CreateNoWindow 启动（不创建任何窗口），
-# start-blackhole.vbs 只负责静默调用该 ps1（wscript 本身不弹窗）。
+# 计划任务/启动器里的 vbs 只负责静默调用该 ps1（wscript 本身不弹窗）。
 $ps1 = Join-Path $installDir 'start-blackhole-hidden.ps1'
 @"
 # Start loopback-blackhole.exe without creating any console window.
@@ -54,17 +56,52 @@ if (Get-Process -Name 'loopback-blackhole' -ErrorAction SilentlyContinue) { exit
 `$psi.WindowStyle = 'Hidden'
 [System.Diagnostics.Process]::Start(`$psi) | Out-Null
 "@ | Set-Content -LiteralPath $ps1 -Encoding ASCII
-$vbs = Join-Path $installDir 'start-blackhole.vbs'
-@"
+$taskName = 'codex-cn-faststart-blackhole'
+
+if ($Lightweight) {
+    # ---- 轻量模式：不注册开机自启，生成"ChatGPT"启动器 + 桌面快捷方式 ----
+    # 开机零进程；双击快捷方式 → 先静默拉起黑洞服务（毫秒级）→ 再启动 Codex。
+    $launcherVbs = Join-Path $installDir 'launch-codex.vbs'
+    @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$ps1""", 0, False
+WScript.Sleep 600
+WshShell.Run "explorer.exe shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App", 1, False
+"@ | Set-Content -LiteralPath $launcherVbs -Encoding ASCII
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $lnkPath = Join-Path $desktop 'ChatGPT.lnk'
+    $sh = New-Object -ComObject WScript.Shell
+    $lnk = $sh.CreateShortcut($lnkPath)
+    $lnk.TargetPath = "$env:windir\System32\wscript.exe"
+    $lnk.Arguments = '"' + $launcherVbs + '"'
+    $lnk.WorkingDirectory = $installDir
+    $lnk.Description = 'ChatGPT（先拉起本地快速失败代理，再启动 ChatGPT 桌面版）'
+    $pkg = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue
+    $icon = Join-Path $installDir 'chatgpt.ico'
+    if ($pkg) {
+        $src = Join-Path $pkg.InstallLocation 'app\resources\icon-chatgpt.ico'
+        if (Test-Path $src) { Copy-Item $src $icon -Force }
+    }
+    if (Test-Path $icon) { $lnk.IconLocation = "$icon,0" }
+    $lnk.Save()
+    # 若此前用默认模式装过，切到轻量模式时清掉登录自启任务
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        schtasks /delete /tn $taskName /f | Out-Null
+    }
+    Write-Host '[2/5] 轻量模式：未注册开机自启，已生成桌面 ChatGPT 快捷方式'
+} else {
+    # ---- 默认模式：登录自启（任务计划），无窗口隐藏运行 ----
+    $vbs = Join-Path $installDir 'start-blackhole.vbs'
+    @"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$ps1""", 0, False
 "@ | Set-Content -LiteralPath $vbs -Encoding ASCII
-$taskName = 'codex-cn-faststart-blackhole'
-schtasks /create /tn $taskName /tr "wscript.exe `"$vbs`"" /sc onlogon /rl LIMITED /f | Out-Null
-# 清理旧版本可能残留在启动文件夹里的 vbs
-$legacyVbs = Join-Path ([Environment]::GetFolderPath('Startup')) 'loopback-blackhole.vbs'
-if (Test-Path $legacyVbs) { Remove-Item $legacyVbs -Force; Write-Host '      已清理旧版启动文件夹项' }
-Write-Host '[2/5] 开机自启已配置（任务计划：' + $taskName + '）'
+    schtasks /create /tn $taskName /tr "wscript.exe `"$vbs`"" /sc onlogon /rl LIMITED /f | Out-Null
+    # 清理旧版本可能残留在启动文件夹里的 vbs
+    $legacyVbs = Join-Path ([Environment]::GetFolderPath('Startup')) 'loopback-blackhole.vbs'
+    if (Test-Path $legacyVbs) { Remove-Item $legacyVbs -Force; Write-Host '      已清理旧版启动文件夹项' }
+    Write-Host '[2/5] 开机自启已配置（任务计划：' + $taskName + '）'
+}
 
 # ---------- 第 3 步：hosts 快速失败屏蔽段 ----------
 $hosts  = 'C:\Windows\System32\drivers\etc\hosts'
@@ -129,7 +166,11 @@ if ($IncludeDeepSeekEnv) {
 }
 
 Write-Host ''
-Write-Host '安装完成。请完全退出 Codex 桌面版（含托盘图标）后重新打开验证启动速度。'
+if ($Lightweight) {
+    Write-Host '安装完成（轻量模式）。以后请用桌面"ChatGPT"快捷方式启动 Codex（开机零自启、零常驻）。'
+} else {
+    Write-Host '安装完成。请完全退出 Codex 桌面版（含托盘图标）后重新打开验证启动速度。'
+}
 Write-Host '卸载请运行 scripts\uninstall.ps1。'
 
 
