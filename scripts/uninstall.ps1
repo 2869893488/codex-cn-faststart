@@ -37,6 +37,8 @@ $launcherVbs = Join-Path (Join-Path $env:USERPROFILE '.codex\faststart') 'launch
 if (Test-Path $launcherVbs) { Remove-Item $launcherVbs -Force }
 $desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'ChatGPT.lnk'
 if (Test-Path $desktopLnk) { Remove-Item $desktopLnk -Force }
+$exe = Join-Path (Join-Path $env:USERPROFILE '.codex\faststart') 'loopback-blackhole.exe'
+if (Test-Path $exe) { Remove-Item $exe -Force }
 $legacyVbs = Join-Path ([Environment]::GetFolderPath('Startup')) 'loopback-blackhole.vbs'
 if (Test-Path $legacyVbs) { Remove-Item $legacyVbs -Force }
 Write-Host '[2/4] 开机自启与启动器已移除'

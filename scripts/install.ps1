@@ -3,13 +3,15 @@
 # 原理详见 README.md。脚本可重复执行（幂等）。
 #
 # 用法（PowerShell）：
-#   .\install.ps1                      # 通用快速启动（默认：登录时自动运行黑洞服务）
+#   .\install.ps1                      # 默认：按需启动，不注册登录自启
 #   .\install.ps1 -Lightweight         # 轻量模式：开机零自启，改生成桌面"ChatGPT"快捷方式按需启动
+#   .\install.ps1 -EnableAutoStart     # 显式启用登录自启
 #   .\install.ps1 -IncludeDeepSeekEnv  # 额外写入 ~/.codex/.env 快速失败代理
 #                                      # （DeepSeek 直连用户才需要，可与上面组合）
 param(
     [switch]$IncludeDeepSeekEnv,
-    [switch]$Lightweight
+    [switch]$Lightweight,
+    [switch]$EnableAutoStart
 )
 $ErrorActionPreference = 'Stop'
 
@@ -19,6 +21,7 @@ if (-not $isAdmin) {
     $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($IncludeDeepSeekEnv) { $argList += ' -IncludeDeepSeekEnv' }
     if ($Lightweight) { $argList += ' -Lightweight' }
+    if ($EnableAutoStart) { $argList += ' -EnableAutoStart' }
     Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait
     exit $LASTEXITCODE
 }
@@ -58,7 +61,7 @@ if (Get-Process -Name 'loopback-blackhole' -ErrorAction SilentlyContinue) { exit
 "@ | Set-Content -LiteralPath $ps1 -Encoding ASCII
 $taskName = 'codex-cn-faststart-blackhole'
 
-if ($Lightweight) {
+if ($Lightweight -or -not $EnableAutoStart) {
     # ---- 轻量模式：不注册开机自启，生成"ChatGPT"启动器 + 桌面快捷方式 ----
     # 开机零进程；双击快捷方式 → 先静默拉起黑洞服务（毫秒级）→ 再启动 Codex。
     $launcherVbs = Join-Path $installDir 'launch-codex.vbs'
@@ -166,8 +169,8 @@ if ($IncludeDeepSeekEnv) {
 }
 
 Write-Host ''
-if ($Lightweight) {
-    Write-Host '安装完成（轻量模式）。以后请用桌面"ChatGPT"快捷方式启动 Codex（开机零自启、零常驻）。'
+if ($Lightweight -or -not $EnableAutoStart) {
+    Write-Host '安装完成（按需模式）。以后请用桌面"ChatGPT"快捷方式启动 Codex（开机零自启、零常驻）。'
 } else {
     Write-Host '安装完成。请完全退出 Codex 桌面版（含托盘图标）后重新打开验证启动速度。'
 }
